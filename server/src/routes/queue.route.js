@@ -1,12 +1,16 @@
 import { Role } from "@prisma/client";
 import express from "express";
 import {
+  callNextQueue,
   createQueueSession,
+  currentServedQueue,
   determineNextQueue,
   getQueueList,
   getQueueListByStatus, // Add this import
   markQueueStatus,
   restoreSkippedQueue,
+  setDeferredRequestStatus,
+  setRequestStatus,
   viewQueues,
 } from "../controllers/queue.controller.js";
 import {
@@ -48,7 +52,27 @@ router.get(
 );
 
 router.put(
-  "/status",
+  "/call/:windowId",
+  authenticateToken,
+  authorizeRoles(Role.PERSONNEL, Role.WORKING_SCHOLAR),
+  callNextQueue
+);
+
+router.put(
+  "/set/status/:queueId/:requestId/:requestStatus/:windowId",
+  authenticateToken,
+  authorizeRoles(Role.PERSONNEL, Role.WORKING_SCHOLAR),
+  setRequestStatus
+);
+router.put(
+  "/set/status/deferred/:queueId/:requestId/:windowId/:requestStatus",
+  authenticateToken,
+  authorizeRoles(Role.PERSONNEL, Role.WORKING_SCHOLAR),
+  setDeferredRequestStatus
+);
+
+router.put(
+  "/:queueId/:windowId/mark-status",
   authenticateToken,
   authorizeRoles(Role.PERSONNEL, Role.WORKING_SCHOLAR),
   markQueueStatus
@@ -59,6 +83,13 @@ router.put(
   authenticateToken,
   authorizeRoles(Role.PERSONNEL, Role.WORKING_SCHOLAR),
   restoreSkippedQueue
+);
+
+router.get(
+  "/current/:windowId",
+  authenticateToken,
+  authorizeRoles(Role.PERSONNEL, Role.WORKING_SCHOLAR),
+  currentServedQueue
 );
 
 export default router;

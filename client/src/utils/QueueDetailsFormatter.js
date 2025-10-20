@@ -44,19 +44,24 @@ export const formatQueueData = (queueData) => {
     ).padStart(3, "0")}`,
     type: queueData.queueType === "PRIORITY" ? "Priority" : "Regular",
     queueStatus: queueData.queueStatus,
+    windowId: queueData.windowId,
     name: queueData.studentFullName,
     studentId: queueData.studentId,
     course: `${queueData.courseCode} - ${queueData.yearLevel} Year`,
     time: formatTime(queueData.createdAt).time,
     requests: queueData.requests.map((request) => ({
       id: request.requestId,
-      name: request.requestType.requestName,
+      name: request.requestType?.requestName || "Unknown Request",
       status:
         request.requestStatus === "WAITING"
           ? "In Progress"
           : request.requestStatus === "COMPLETED"
           ? "Completed"
-          : request.requestStatus,
+          : request.requestStatus === "STALLED"
+          ? "Stalled"
+          : request.requestStatus === "SKIPPED"
+          ? "Skipped"
+          : "Cancelled",
     })),
   };
 };

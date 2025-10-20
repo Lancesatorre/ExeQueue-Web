@@ -6,7 +6,8 @@ import {
   SkipForward,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   assignServiceWindow,
   checkAvailableWindow,
@@ -24,14 +25,26 @@ import {
 import {
   AnnounceQueue,
   handleButtonClick,
+  unlockSpeech,
   useAnnounceQueueStates,
 } from "../staffs/Announce_Queue";
 
 import { SocketEvents } from "../../../../server/src/services/enums/SocketEvents.js";
-import { getQueueListByStatus } from "../../api/staff.queue.api.js";
+import {
+  currentServedQueue,
+  getCallNextQueue,
+  getDeferredQueue,
+  getQueueListByStatus,
+  markQueueStatus,
+  setDeferredRequestStatus,
+  setRequestStatus,
+} from "../../api/staff.queue.api.js";
 import { Queue_Type, Status } from "../../constants/queueEnums.js";
+import { QueueActions, WindowEvents } from "../../constants/SocketEvents.js";
 
 export default function Manage_Queue() {
+  const navigate = useNavigate();
+  const autoCallInProgressRef = useRef(false);
   const [deferredOpen, setDeferredOpen] = useState(true);
   const [nextInLineOpen, setNextInLineOpen] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -41,13 +54,26 @@ export default function Manage_Queue() {
   const [hoveredRow, setHoveredRow] = useState(null);
 
   // Add these states for the new flow
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [showWindowModal, setShowWindowModal] = useState(false);
-  const [selectedWindow, setSelectedWindow] = useState(null);
+  const [selectedWindow, setSelectedWindow] = useState({});
   const [availableWindows, setAvailableWindows] = useState([]);
 
   const { socket, isConnected } = useSocket();
   const [loading, setLoading] = useState(false);
+  const [globalQueueList, setGlobalQueueList] = useState([]);
+  const [wasQueueEmpty, setWasQueueEmpty] = useState(false);
+  const DEFAULT_QUEUE = {
+    queueNo: "R000",
+    studentId: "N/A",
+    name: "John Doe",
+    course: "N/A",
+    type: "N/A",
+    time: "N/A",
+    requests: [],
+  };
+  const getDefaultQueue = () => DEFAULT_QUEUE;
+  const [currentQueue, setCurrentQueue] = useState(null);
   const {
     lastAnnounceTime,
     setLastAnnounceTime,
@@ -55,153 +81,10 @@ export default function Manage_Queue() {
     setDisabledForSeconds,
   } = useAnnounceQueueStates();
 
-  const [queueList, setQueueList] = useState([
-    {
-      queueNo: "R009",
-      studentId: "23921845",
-      name: "John Doe",
-      course: "BSHM- 1st Year",
-      type: "Regular",
-      time: "11:21 AM",
-      requests: [
-        { id: 1, name: "Transmittal Letter", status: "In Progress" },
-        { id: 2, name: "Good Moral Certificate", status: "In Progress" },
-      ],
-    },
-    {
-      queueNo: "R020",
-      studentId: "23219823",
-      name: "Kevin Durant",
-      course: "BSIT - 2nd Year",
-      type: "Regular",
-      time: "9:05 AM",
-      requests: [{ id: 1, name: "Insurance Payment", status: "In Progress" }],
-    },
-    {
-      queueNo: "R021",
-      studentId: "2323003",
-      name: "Stephen Curry",
-      course: "BSA - 3rd Year",
-      type: "Regular",
-      time: "9:07 AM",
-      requests: [
-        { id: 1, name: "Temporary Gate Pass", status: "In Progress" },
-        { id: 2, name: "Good Moral Certificate", status: "In Progress" },
-        { id: 3, name: "Insurance Payment", status: "In Progress" },
-      ],
-    },
-    {
-      queueNo: "R022",
-      studentId: "23844352",
-      name: "Lebron James",
-      course: "BSCS - 4th Year",
-      type: "Regular",
-      time: "9:07 AM",
-      requests: [{ id: 1, name: "Insurance Payment", status: "In Progress" }],
-    },
-    {
-      queueNo: "R023",
-      studentId: "23844362",
-      name: "Dwayne Wade",
-      course: "BSN - 2nd Year",
-      type: "Regular",
-      time: "9:08 AM",
-      requests: [{ id: 1, name: "Transmittal Letter", status: "In Progress" }],
-    },
-    {
-      queueNo: "R022",
-      studentId: "23844352",
-      name: "Lebron James",
-      course: "BSCS - 4th Year",
-      type: "Regular",
-      time: "9:07 AM",
-      requests: [{ id: 1, name: "Insurance Payment", status: "In Progress" }],
-    },
-    {
-      queueNo: "R023",
-      studentId: "23844362",
-      name: "Dwayne Wade",
-      course: "BSN - 2nd Year",
-      type: "Regular",
-      time: "9:08 AM",
-      requests: [{ id: 1, name: "Transmittal Letter", status: "Stalled" }],
-    },
-  ]);
+  const [queueList, setQueueList] = useState([]);
 
-  const [deferredQueue, setDeferredQueue] = useState([
-    {
-      queueNo: "R009",
-      studentId: "23921845",
-      name: "John Doe",
-      course: "BSHM- 1st Year",
-      type: "Regular",
-      time: "11:21 AM",
-      requests: [
-        { id: 1, name: "Transmittal Letter", status: "Stalled" },
-        { id: 2, name: "Good Moral Certificate", status: "Stalled" },
-      ],
-    },
-    {
-      queueNo: "R020",
-      studentId: "23219823",
-      name: "Kevin Durant",
-      course: "BSIT - 2nd Year",
-      type: "Regular",
-      time: "9:05 AM",
-      requests: [{ id: 1, name: "Insurance Payment", status: "Stalled" }],
-    },
-    {
-      queueNo: "R021",
-      studentId: "2323003",
-      name: "Stephen Curry",
-      course: "BSA - 3rd Year",
-      type: "Regular",
-      time: "9:07 AM",
-      requests: [
-        { id: 1, name: "Temporary Gate Pass", status: "Stalled" },
-        { id: 2, name: "Good Moral Certificate", status: "Stalled" },
-        { id: 3, name: "Insurance Payment", status: "Stalled" },
-      ],
-    },
-    {
-      queueNo: "R022",
-      studentId: "23844352",
-      name: "Lebron James",
-      course: "BSCS - 4th Year",
-      type: "Regular",
-      time: "9:07 AM",
-      requests: [{ id: 1, name: "Insurance Payment", status: "Stalled" }],
-    },
-    {
-      queueNo: "R023",
-      studentId: "23844362",
-      name: "Dwayne Wade",
-      course: "BSN - 2nd Year",
-      type: "Regular",
-      time: "9:08 AM",
-      requests: [{ id: 1, name: "Transmittal Letter", status: "Stalled" }],
-    },
-    {
-      queueNo: "R022",
-      studentId: "23844352",
-      name: "Lebron James",
-      course: "BSCS - 4th Year",
-      type: "Regular",
-      time: "9:07 AM",
-      requests: [{ id: 1, name: "Insurance Payment", status: "Stalled" }],
-    },
-    {
-      queueNo: "R023",
-      studentId: "23844362",
-      name: "Dwayne Wade",
-      course: "BSN - 2nd Year",
-      type: "Regular",
-      time: "9:08 AM",
-      requests: [{ id: 1, name: "Transmittal Letter", status: "Stalled" }],
-    },
-  ]);
-  const [nextInLine, setNextInLine] = useState([]);
-
+  const [deferredQueue, setDeferredQueue] = useState([]);
+  const nextInLine = (globalQueueList || []).slice(0);
   const sortByPriorityPattern = useCallback((queues) => {
     console.log("🔢 Starting sort with queues:", queues?.length);
 
@@ -209,21 +92,6 @@ export default function Manage_Queue() {
       console.log("⚠️ No queues to sort");
       return [];
     }
-    if (queues.length > 0) {
-      console.log(
-        "🔍 Available properties on first queue:",
-        Object.keys(queues[0])
-      );
-    }
-    // // Debug: Log all queue types
-    // queues.forEach((q, index) => {
-    //   console.log(
-    //     `Queue ${index}: id=${q.queueId}, type=${
-    //       q.type
-    //     }, upper=${q.type?.toUpperCase()}`
-    //   );
-    // });
-
     // More flexible filtering with fallbacks
     const priority = queues.filter((q) => {
       const type = q.type?.toUpperCase();
@@ -316,72 +184,318 @@ export default function Manage_Queue() {
   }, []);
 
   const fetchQueueList = useCallback(async () => {
+    // ✅ Only fetch if window is assigned
+    if (!selectedWindow?.id) {
+      console.log("⚠️ No window assigned yet, skipping queue fetch");
+      return;
+    }
+
     try {
-      setLoading(true);
-      const queueData = await getQueueListByStatus(Status.WAITING);
-      if (queueData && Array.isArray(queueData)) {
-        handleFormatQueueData(queueData);
+      setIsLoading(true);
+
+      // ✅ Fetch WAITING queues (global - no windowId)
+      const waitingQueues = await getQueueListByStatus(Status.WAITING);
+
+      if (waitingQueues && Array.isArray(waitingQueues)) {
+        const formattedQueue = waitingQueues.map(formatQueueData);
+        const sortedQueue = sortByPriorityPattern(formattedQueue);
+        setGlobalQueueList(sortedQueue);
+      }
+
+      // ✅ Fetch DEFERRED queues (window-specific)
+      const deferredQueues = await getDeferredQueue(
+        Status.DEFERRED
+        // selectedWindow.id
+      );
+      console.log("Defered Response Api", deferredQueues);
+      if (deferredQueues && Array.isArray(deferredQueues)) {
+        const formattedDeferred = deferredQueues.map(formatQueueData);
+        console.log("Deferred Queue", formattedDeferred);
+        setDeferredQueue(formattedDeferred);
       }
     } catch (error) {
       console.error("Error in fetching queue data:", error);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
-  }, [handleFormatQueueData]);
+  }, [selectedWindow?.id, sortByPriorityPattern]);
+
+  // Handle when this window gets assigned
+  const handleWindowAssigned = useCallback((data) => {
+    console.log("🟢 Window Assigned:", data);
+    showToast(data.message || "Window assigned successfully", "info");
+    // Optional: refresh window status or queue
+    // refreshWindowStatus();
+  }, []);
+
+  // Handle when this window is released
+  const handleWindowRelease = useCallback(
+    async (data) => {
+      // 🚨 CASE 1: The client who owns the released window
+      if (data.previousWindowId === selectedWindow?.id) {
+        // Clear local state
+        setSelectedWindow(null);
+        setCurrentQueue(null);
+        setIsLoading(true);
+        localStorage.removeItem("selectedWindow");
+
+        showToast("Your window has been released", "info");
+
+        // 🌀 Force refresh window list — same behavior as when first loading the page
+        await loadWindows(); // reuse your existing window loader
+        setShowWindowModal(true); // show the window selection modal again
+        return;
+      }
+
+      // 🚨 CASE 2: Other clients — just info toast + soft refresh
+      showToast(`${data.message}`, "info");
+
+      // Optional: also refresh window list in background for accuracy
+      await loadWindows();
+    },
+    [selectedWindow?.id]
+  );
+
+  const handleError = useCallback((error) => {
+    console.error("❌ Socket Error:", error);
+    showToast("Connection error occurred", "error");
+    setIsLoading(false);
+  }, []);
+  useEffect(() => {
+    // ✅ Only fetch queues AFTER window is assigned
+    if (selectedWindow?.id && !showWindowModal) {
+      fetchQueueList();
+    }
+  }, [selectedWindow?.id, showWindowModal, fetchQueueList]);
 
   useEffect(() => {
-    if (!socket || !isConnected) return;
+    if (!socket || !isConnected || !selectedWindow?.id) return;
 
-    fetchQueueList();
-
-    const handleWindowAssigned = (data) => {
-      console.log("🟢 Window Assigned:", data);
-      showToast(data.message, "info");
-      refreshWindowStatus(); // ⬅️ we'll define this next
-    };
-    const handleWindowRelease = (data) => {
-      console.log("🟡 Window Released:", data);
-      refreshWindowStatus(); // ⬅️ refresh availability here too
-    };
-
+    // When new queue is created globally
     const handleQueueCreated = (newQueueData) => {
-      console.log("🔔 QUEUE_CREATED event received:", newQueueData);
-      handleAddNewQueue(newQueueData);
+      // Just add to global list, no auto-call logic here
+      const formattedNewQueue = formatQueueData(newQueueData);
+      setGlobalQueueList((prev) => {
+        const exists = prev.some(
+          (q) => q.queueId === formattedNewQueue.queueId
+        );
+        if (exists) return prev;
+        const merged = [...prev, formattedNewQueue];
+        return sortByPriorityPattern(merged);
+      });
+    };
+    // 🟡 When another window removes someone from the global queue
+    const handleQueueRemoved = (data) => {
+      setGlobalQueueList((prev) =>
+        prev.filter((q) => q.queueId !== data.queueId)
+      );
     };
 
-    const handleError = (error) => {
-      console.error("❌ Error:", error);
-      setLoading(false);
+    // 🟢 When a queue is deferred
+    const handleDeferredQueue = (queue) => {
+      // console.log("🟡 Queue deferred:", queue);
+      const formattedDeferredQueue = formatQueueData(queue);
+      showToast(
+        `Queue (${formattedDeferredQueue.queueNo}) deferred`,
+        "warning"
+      );
+
+      // Add to deferred list if not already there
+      setDeferredQueue((prev) => {
+        const exists = prev.some(
+          (q) => q.queueId === formattedDeferredQueue.queueId
+        );
+        if (exists) return prev;
+        return [...prev, formattedDeferredQueue];
+      });
     };
 
-    socket.on("window-assigned", handleWindowAssigned);
-    socket.on("window-released", handleWindowRelease);
-    // socket.on("queue-list-data", handleQueueListData);
+    const handleCompleted = (queue) => {
+      console.log("✅ Queue Completed:", queue);
+      const formattedCompletedQueue = formatQueueData(queue);
+
+      // Remove from deferred list if it exists there
+      setDeferredQueue((prev) =>
+        prev.filter((q) => q.queueId !== formattedCompletedQueue.queueId)
+      );
+
+      // Also remove from global queue list if needed
+      setGlobalQueueList((prev) =>
+        prev.filter((q) => q.queueId !== formattedCompletedQueue.queueId)
+      );
+    };
+
+    const handleCancelled = (queue) => {
+      console.log("✅ Queue Cancelled:", queue);
+      const formattedCancelledQueue = formatQueueData(queue);
+
+      // Remove from deferred list if it exists there
+      setDeferredQueue((prev) =>
+        prev.filter((q) => q.queueId !== formattedCancelledQueue.queueId)
+      );
+
+      // Also remove from global queue list if needed
+      setGlobalQueueList((prev) =>
+        prev.filter((q) => q.queueId !== formattedCancelledQueue.queueId)
+      );
+    };
+
+    const handlePartiallyCompleted = (queue) => {
+      console.log("✅ Queue Cancelled:", queue);
+      const formattedPartialCompletedQueue = formatQueueData(queue);
+
+      // Remove from deferred list if it exists there
+      setDeferredQueue((prev) =>
+        prev.filter((q) => q.queueId !== formattedPartialCompletedQueue.queueId)
+      );
+
+      // Also remove from global queue list if needed
+      setGlobalQueueList((prev) =>
+        prev.filter((q) => q.queueId !== formattedPartialCompletedQueue.queueId)
+      );
+    };
+
+    const handleDeferredRequestUpdated = (data) => {
+      console.log("🔄 Deferred request updated:", data);
+      setDeferredQueue((prev) =>
+        prev.map((q) =>
+          q.queueId === data.queueId
+            ? {
+                ...q,
+                requests: q.requests.map((req) =>
+                  req.id === data.requestId
+                    ? {
+                        ...req,
+                        status: normalizeStatusForDisplay(data.requestStatus),
+                        // Include any other fields from the updated request if needed
+                        processedBy: data.updatedRequest?.processedBy,
+                        processedAt: data.updatedRequest?.processedAt,
+                      }
+                    : req
+                ),
+              }
+            : q
+        )
+      );
+      // ✅ Update selected queue's specific request
+      setSelectedQueue((prev) =>
+        prev && prev.queueId === data.queueId
+          ? {
+              ...prev,
+              requests: prev.requests.map((req) =>
+                req.id === data.requestId
+                  ? {
+                      ...req,
+                      status: normalizeStatusForDisplay(data.requestStatus),
+                      processedBy: data.updatedRequest?.processedBy,
+                      processedAt: data.updatedRequest?.processedAt,
+                    }
+                  : req
+              ),
+            }
+          : prev
+      );
+
+      // Optional: Show notification for remote updates only
+      // if (data.updatedBy !== currentStaffId) {
+      //   showToast(`Request in queue updated by another window`, "info");
+      // }
+    };
+
+    const handleQueueReset = (data) => {
+      // console.log("🔄 Queue reset to waiting:", data);
+      if (data.previousWindowId === selectedWindow?.id) {
+        console.log("⏭️ Skipping reset event for own window");
+        return; // Don't show toast, don't process
+      }
+
+      // Format the reset data first
+      const formattedResetQueue = formatQueueData(data);
+
+      // Update global queue list with proper sorting
+      setGlobalQueueList((prev) => {
+        // Check if queue already exists in the list
+        const existingIndex = prev.findIndex((q) => q.queueId === data.queueId);
+
+        if (existingIndex === -1) {
+          // Queue doesn't exist, add it to the list
+          console.log(`Adding reset queue ${data.queueId} to list`);
+          const updated = [...prev, formattedResetQueue];
+          return sortByPriorityPattern(updated);
+        }
+
+        // Queue exists, update it
+        const updated = prev.map((q) =>
+          q.queueId === data.queueId ? formattedResetQueue : q
+        );
+
+        return sortByPriorityPattern(updated);
+      });
+
+      // Remove from current queue if it matches
+      if (currentQueue?.queueId === data.queueId) {
+        showToast("Duplicated", "warning");
+        setCurrentQueue(null);
+      }
+
+      // Remove from deferred list if it exists there
+      setDeferredQueue((prev) =>
+        prev.filter((q) => q.queueId !== data.queueId)
+      );
+
+      showToast(
+        `Queue ${formattedResetQueue.queueNo} was set to WAITING.`,
+        "warning"
+      );
+    };
+
+    socket.on(QueueActions.QUEUE_RESET, handleQueueReset);
+    socket.on(QueueActions.QUEUE_DEFERRED, handleDeferredQueue);
+    socket.on(
+      QueueActions.REQUEST_DEFERRED_UPDATED,
+      handleDeferredRequestUpdated
+    );
+    socket.on(QueueActions.QUEUE_CANCELLED, handleCancelled);
+    socket.on(QueueActions.QUEUE_COMPLETED, handleCompleted);
+    socket.on(QueueActions.QUEUE_PARTIALLY_COMPLETE, handlePartiallyCompleted);
     socket.on(SocketEvents.QUEUE_CREATED, handleQueueCreated);
+    socket.on(QueueActions.QUEUE_TAKEN, handleQueueRemoved);
+    socket.on(WindowEvents.ASSIGN_WINDOW, handleWindowAssigned);
+    socket.on(WindowEvents.RELEASE_WINDOW, handleWindowRelease);
     socket.on("error", handleError);
 
     return () => {
-      // socket.off("queue-list-data", handleQueueListData);
-      socket.off("window-assigned", handleWindowAssigned);
-      socket.off("window-released", handleWindowRelease);
+      socket.off(QueueActions.QUEUE_RESET, handleQueueReset);
+      socket.off(QueueActions.QUEUE_DEFERRED, handleDeferredQueue);
+      socket.off(QueueActions.QUEUE_CANCELLED, handleCancelled);
+      socket.off(QueueActions.QUEUE_COMPLETED, handleCompleted);
+      socket.off(
+        QueueActions.REQUEST_DEFERRED_UPDATED,
+        handleDeferredRequestUpdated
+      );
+
+      socket.off(
+        QueueActions.QUEUE_PARTIALLY_COMPLETE,
+        handlePartiallyCompleted
+      );
       socket.off(SocketEvents.QUEUE_CREATED, handleQueueCreated);
+      socket.off(QueueActions.QUEUE_TAKEN, handleQueueRemoved);
+      socket.off(WindowEvents.ASSIGN_WINDOW, handleWindowAssigned);
+      socket.off(WindowEvents.RELEASE_WINDOW, handleWindowRelease);
       socket.off("error", handleError);
     };
-  }, [socket, isConnected, fetchQueueList, handleAddNewQueue]);
-
-  const handleRefresh = () => {
-    // manual refresh
-    fetchQueueList();
+  }, [
+    socket,
+    isConnected,
+    selectedWindow?.id,
+    sortByPriorityPattern,
+    handleWindowAssigned,
+    handleWindowRelease,
+    handleError,
+  ]);
+  const isDefaultQueue = (queue) => {
+    return queue && queue.queueNo === "R000" && queue.studentId === "N/A";
   };
-  const [currentQueue, setCurrentQueue] = useState({
-    queueNo: "",
-    type: "",
-    name: "",
-    studentId: "",
-    course: "",
-    time: "",
-    requests: [],
-  });
 
   const filteredNextInLine = (nextInLine || []).filter((item) => {
     const search = searchTerm?.toLowerCase() || "";
@@ -393,172 +507,280 @@ export default function Manage_Queue() {
     );
   });
 
+  // console.log("Filtered Next In Line: ", filteredNextInLine);
+  const handleCallNext = async (overrideWindow) => {
+    const activeWindow = overrideWindow || selectedWindow;
+    try {
+      if (!activeWindow?.id) {
+        showToast("Please select a window first.", "error");
+        return;
+      }
+      if (currentQueue?.queueId) {
+        console.log(
+          `🔖 Marking previous queue ${currentQueue.queueNo} before calling next...`
+        );
+
+        try {
+          const markResponse = await markQueueStatus(
+            currentQueue.queueId,
+            currentQueue.windowId
+          );
+
+          if (!markResponse.success) {
+            console.error(
+              "BLOCKING: Failed to mark previous queue:",
+              markResponse.message
+            );
+
+            // 🚨 HARD FAIL - Do NOT proceed
+            showToast(
+              `Cannot proceed: Failed to mark ${currentQueue.queueNo} as completed. Please try again.`,
+              "error"
+            );
+            return; // ⛔ Stop execution
+          }
+
+          console.log(
+            `✅ Previous queue marked as: ${markResponse.queue.queueStatus}`
+          );
+        } catch (markError) {
+          console.error(
+            "❌ BLOCKING: Error marking previous queue:",
+            markError
+          );
+
+          // 🚨 HARD FAIL - Do NOT proceed
+          showToast(
+            "Cannot proceed: Error updating queue status. Please try again.",
+            "error"
+          );
+          return; // ⛔ Stop execution
+        }
+      }
+      const response = await getCallNextQueue(activeWindow.id);
+      console.log("Call Next Response:", response);
+
+      // Handle backend response
+      if (response.status === 404 || !response.success) {
+        // 🟡 Gracefully handle "no queue left"
+        console.log(response.data);
+        if (response?.message?.includes("No queues left")) {
+          showToast("🎉 No more queues left for today!", "info");
+          setCurrentQueue(getDefaultQueue());
+          setWasQueueEmpty(true);
+          return;
+        }
+
+        showToast(response?.message || "Failed to call next queue.", "error");
+        return;
+      }
+
+      const assignedQueue = response.data;
+      const formattedQueue = formatQueueData(assignedQueue);
+
+      // ✅ Set current queue for this window only
+      setCurrentQueue(formattedQueue);
+      console.log("Current Queue:", formattedQueue);
+
+      // ✅ Remove from global list
+      setGlobalQueueList((prev) =>
+        prev.filter((q) => q.queueId !== assignedQueue.queueId)
+      );
+
+      // ✅ Broadcast to all windows
+      socket.emit(QueueActions.QUEUE_TAKEN, {
+        queueId: assignedQueue.queueId,
+        queueNo: assignedQueue.queueNo,
+        windowId: activeWindow.id,
+      });
+
+      console.log("Formatted Queue:", formattedQueue.queueNo);
+
+      // 🗣️ Announce
+      console.log("Active Windfow Name", activeWindow);
+      AnnounceQueue(formattedQueue.queueNo, activeWindow.name);
+      showToast(`Now serving ${formattedQueue.queueNo}`, "success");
+    } catch (error) {
+      console.error("Error in handleCallNext:", error);
+      showToast("Error calling next queue.", "error");
+    }
+  };
+
+  const handleForceRefresh = async () => {
+    try {
+      if (!selectedWindow?.id) {
+        showToast("No window selected", "error");
+        return;
+      }
+
+      setIsLoading(true);
+
+      // Re-fetch current queue from backend
+      const currentQueueResponse = await getCurrentQueueByWindow(
+        selectedWindow.id
+      );
+
+      if (currentQueueResponse?.success && currentQueueResponse.queue) {
+        const restoredQueue = formatQueueData(currentQueueResponse.queue);
+        setCurrentQueue(restoredQueue);
+        showToast("Queue synced successfully", "success");
+      } else {
+        setCurrentQueue(null);
+        showToast("No active queue found", "info");
+      }
+
+      // Also refresh global list
+      await fetchQueueList();
+    } catch (error) {
+      console.error("Error force refreshing:", error);
+      showToast("Failed to sync queue", "error");
+    } finally {
+      setIsLoading(false);
+    }
+  };
   const filteredDeferredQueue = deferredQueue.filter((item) => {
     const search = deferredSearchTerm?.toLowerCase() || "";
-
     return (
       (item.queueNo?.toLowerCase() || "").includes(search) ||
       (item.name?.toLowerCase() || "").includes(search) ||
       (item.studentId?.toLowerCase() || "").includes(search)
     );
   });
+  const normalizeStatusForDisplay = (backendStatus) => {
+    const displayMap = {
+      COMPLETED: "Completed",
+      STALLED: "Stalled",
+      SKIPPED: "Skipped",
+      CANCELLED: "Cancelled",
+      PENDING: "Pending",
+      IN_PROGRESS: "In Progress",
+    };
 
-  const handleRequestAction = (requestId, action) => {
-    setCurrentQueue((prev) => ({
-      ...prev,
-      requests: prev.requests.map((req) => {
-        if (req.id === requestId) {
-          switch (action) {
-            case "done":
-              return { ...req, status: "Completed" };
-            case "stall":
-              return { ...req, status: "Stalled" };
-            case "skip":
-              return { ...req, status: "Skipped" };
-            case "cancel":
-              return { ...req, status: "Cancelled" };
-            default:
-              return req;
-          }
-        }
-        return req;
-      }),
-    }));
+    return displayMap[backendStatus] || backendStatus; // Fallback to original if not found
   };
+  const handleRequestAction = async (requestId, action) => {
+    if (!currentQueue) return;
 
-  const handleDeferredAction = (requestId, action) => {
-    if (!selectedQueue) return;
+    console.log("Request ID", requestId);
+    console.log("Action", action);
 
-    setDeferredQueue((prev) =>
-      prev.map((queue) => {
-        if (queue.queueNo === selectedQueue.queueNo) {
-          return {
-            ...queue,
-            requests: queue.requests.map((req) => {
-              if (req.id === requestId) {
-                switch (action) {
-                  case "done":
-                    return { ...req, status: "Completed" };
-                  case "stall":
-                    return { ...req, status: "Stalled" };
-                  case "skip":
-                    return { ...req, status: "Skipped" };
-                  case "cancel":
-                    return { ...req, status: "Cancelled" };
-                  default:
-                    return req;
-                }
-              }
-              return req;
-            }),
-          };
-        }
-        return queue;
-      })
-    );
+    // Map frontend action to backend status
+    const statusMap = {
+      done: "Completed",
+      stall: "Stalled",
+      skip: "Skipped",
+      cancel: "Cancelled",
+    };
 
-    setSelectedQueue((prev) => ({
-      ...prev,
-      requests: prev.requests.map((req) => {
-        if (req.id === requestId) {
-          switch (action) {
-            case "done":
-              return { ...req, status: "Completed" };
-            case "stall":
-              return { ...req, status: "Stalled" };
-            case "skip":
-              return { ...req, status: "Skipped" };
-            case "cancel":
-              return { ...req, status: "Cancelled" };
-            default:
-              return req;
-          }
-        }
-        return req;
-      }),
-    }));
-  };
+    const requestStatus = statusMap[action];
+    if (!requestStatus) return;
 
-  const openActionPanel = (queue) => {
-    setSelectedQueue(queue);
-    setShowActionPanel(true);
-  };
+    // 📸 Snapshot for rollback
+    const snapshot = JSON.parse(JSON.stringify(currentQueue));
 
-  const closeActionPanel = () => {
-    setShowActionPanel(false);
-    setSelectedQueue(null);
-  };
-
-  const handleCallNext = () => {
     try {
-      // Remove current queue from the list
-      const updatedQueueList = queueList.slice(1);
+      // 🚀 Optimistically update UI first
+      setCurrentQueue((prev) => ({
+        ...prev,
+        requests: prev.requests.map((req) =>
+          req.id === requestId
+            ? {
+                ...req,
+                status: normalizeStatusForDisplay(requestStatus),
+              }
+            : req
+        ),
+      }));
 
-      if (updatedQueueList.length === 0) {
-        alert("No more people in queue");
-        setQueueList([]);
-        setNextInLine([]);
-        setCurrentQueue({
-          queueNo: "",
-          type: "",
-          name: "",
-          studentId: "",
-          course: "",
-          time: "",
-          requests: [],
-        });
-        return;
+      // 📞 Call backend to update request status + queue state
+      console.log("Current Queue Window: ", currentQueue);
+      const response = await setRequestStatus(
+        currentQueue.queueId,
+        requestId,
+        requestStatus,
+        currentQueue.windowId
+      );
+
+      if (!response.success) {
+        throw new Error(response.message || "Failed to update request");
       }
 
-      // Get the next person (now first in updated list)
-      const nextPerson = updatedQueueList[0];
+      // ✅ Optional: Sync with final backend state if needed
+      // const updatedRequest = response.data.requestUpdate;
+      // setCurrentQueue(formatQueueData(response.data.queueUpdate));
 
-      // Update current queue to next person
-      setCurrentQueue({
-        queueNo: nextPerson.queueNo,
-        type: nextPerson.type,
-        name: nextPerson.name,
-        studentId: nextPerson.studentId,
-        course: nextPerson.course,
-        time: nextPerson.time,
-        requests: nextPerson.requests || [],
-      });
-
-      // Update queue list (remove the old current)
-      setQueueList(updatedQueueList);
-
-      // Update next in line (remove the old current)
-      setNextInLine((prev) => prev.slice(1));
-
-      // Announce the new current queue
-      AnnounceQueue(nextPerson.queueNo);
+      showToast(`Request updated to ${requestStatus}`, "success");
     } catch (error) {
-      console.error("Error in handleCallNext:", error);
-      alert("An error occurred while calling the next person");
-    }
-  };
-  const handleDonePanel = () => {
-    // alert('Queue completed and closed');
-    closeActionPanel();
-  };
+      console.error("❌ Error updating request:", error);
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case "Completed":
-        return "text-green-600 bg-green-50";
-      case "Stalled":
-        return "text-gray-600 bg-gray-50";
-      case "Skipped":
-        return "text-orange-600 bg-orange-50";
-      case "Cancelled":
-        return "text-red-600 bg-red-50";
-      case "In Progress":
-        return "text-blue-600 bg-blue-50";
-      default:
-        return "text-gray-600 bg-gray-50";
+      // 🔄 Rollback on error
+      setCurrentQueue(snapshot);
+      showToast(error.message || "Error updating request", "error");
     }
   };
 
+  const handleDeferredAction = async (requestId, action) => {
+    if (!selectedQueue) return;
+
+    const statusMap = {
+      done: "Completed",
+      stall: "Stalled",
+      skip: "Skipped",
+      cancel: "Cancelled",
+    };
+
+    const requestStatus = statusMap[action];
+    if (!requestStatus) return;
+
+    // 📸 Snapshot for rollback
+    const snapshot = {
+      selectedQueue: JSON.parse(JSON.stringify(selectedQueue)),
+      deferredQueue: JSON.parse(JSON.stringify(deferredQueue)),
+    };
+
+    try {
+      // 🚀 Update backend
+      const response = await setDeferredRequestStatus(
+        selectedQueue.queueId,
+        requestId,
+        requestStatus,
+        selectedQueue.windowId
+      );
+
+      if (!response.success)
+        throw new Error(
+          response.message || "Failed to update deferred request"
+        );
+
+      // ✅ Optimistically update UI locally (just update status)
+      setSelectedQueue((prev) => ({
+        ...prev,
+        requests: prev.requests.map((r) =>
+          r.id === requestId ? { ...r, status: requestStatus } : r
+        ),
+      }));
+
+      setDeferredQueue((prev) =>
+        prev.map((q) =>
+          q.queueId === selectedQueue.queueId
+            ? {
+                ...q,
+                requests: q.requests.map((r) =>
+                  r.id === requestId ? { ...r, status: requestStatus } : r
+                ),
+              }
+            : q
+        )
+      );
+
+      showToast(`Request updated to ${requestStatus}`, "success");
+    } catch (error) {
+      console.error("❌ Error updating deferred request:", error);
+      setSelectedQueue(snapshot.selectedQueue);
+      setDeferredQueue(snapshot.deferredQueue);
+      showToast(error.message || "Error updating deferred request", "error");
+    }
+  };
   useEffect(() => {
     const restoreOrLoad = async () => {
       if (!socket || !isConnected) return;
@@ -568,7 +790,6 @@ export default function Manage_Queue() {
         const savedWindow = localStorage.getItem("selectedWindow");
         const currentAssignment = await getMyWindowAssignment();
 
-        // ✅ CASE 1: DB has a valid assignment → restore from DB (fallback if no localStorage)
         if (currentAssignment?.success && currentAssignment.assignment) {
           const assignedWindow = currentAssignment.assignment.serviceWindow;
 
@@ -584,28 +805,51 @@ export default function Manage_Queue() {
             status: "active",
           };
 
-          // 🧠 Ensure both app state and localStorage are updated
           setSelectedWindow(restoredWindow);
           localStorage.setItem(
             "selectedWindow",
             JSON.stringify(restoredWindow)
           );
 
-          // ✅ Join socket room
-          socket.emit("join-window", { windowId: restoredWindow.id });
+          socket.emit(WindowEvents.WINDOW_JOINED, {
+            windowId: restoredWindow.id,
+          });
           setShowWindowModal(false);
-          showToast(`Resumed managing ${restoredWindow.name}`, "info");
-          return; // stop here (no modal)
+
+          try {
+            const currentQueueResponse = await currentServedQueue(
+              restoredWindow.id
+            );
+            console.log("Current Queue Response", currentQueueResponse);
+
+            if (currentQueueResponse?.success && currentQueueResponse.queue) {
+              const restoredQueue = formatQueueData(currentQueueResponse.queue);
+              setCurrentQueue(restoredQueue);
+              console.log("✅ Restored current queue:", restoredQueue.queueNo);
+              showToast(
+                `Resumed ${restoredWindow.name} - Serving ${restoredQueue.queueNo}`,
+                "info"
+              );
+            } else {
+              console.log("ℹ️ No active queue found");
+              setCurrentQueue(getDefaultQueue()); // Set default only when confirmed no queue
+              showToast(`${restoredWindow.name} has no active queue`, "info");
+            }
+          } catch (queueError) {
+            console.warn("⚠️ Could not restore current queue:", queueError);
+            setCurrentQueue(getDefaultQueue()); // Set default on error
+            showToast(`Resumed managing ${restoredWindow.name}`, "info");
+          } finally {
+            setIsLoading(false); // Stop loading after queue is set
+          }
+          return;
         }
 
-        // ✅ CASE 2: No assignment → load available windows for selection
         await loadWindows();
       } catch (err) {
         console.error("❌ Error restoring or loading windows:", err);
         showToast("Error restoring window data", "error");
         await loadWindows();
-      } finally {
-        setIsLoading(false);
       }
     };
 
@@ -613,7 +857,6 @@ export default function Manage_Queue() {
   }, [socket, isConnected]);
 
   const loadWindows = async () => {
-    setIsLoading(true);
     try {
       const windowData = await getWindowData();
       const windows = Array.isArray(windowData)
@@ -640,17 +883,17 @@ export default function Manage_Queue() {
       });
       setAvailableWindows(formattedWindows);
       setShowWindowModal(true);
+      // isLoading remains true - modal is now visible
     } catch (error) {
       console.error("❌ Error loading windows:", error);
       showToast("Failed to load windows", "error");
-    } finally {
-      setIsLoading(false);
+      setIsLoading(false); // Only stop loading on error
     }
   };
 
   // Window selection handler
   const handleWindowSelect = async (windowId) => {
-    // setIsLoading(true);
+    unlockSpeech();
     try {
       const window = availableWindows.find((w) => w.id === windowId);
       if (window.status === "inactive") {
@@ -667,23 +910,225 @@ export default function Manage_Queue() {
           status: "active",
         };
 
-        socket.emit("join-window", { windowId });
+        socket.emit(WindowEvents.WINDOW_JOINED, { windowId });
         setSelectedWindow(windowData);
         localStorage.setItem("selectedWindow", JSON.stringify(windowData));
 
         setShowWindowModal(false);
         showToast(`Now managing ${window.name}`, "success");
+
+        // Check for current queue immediately
+        try {
+          const currentQueueResponse = await currentServedQueue(windowData.id);
+          const hasCurrentQueue =
+            currentQueueResponse?.success && currentQueueResponse.queue;
+
+          if (hasCurrentQueue) {
+            const restoredQueue = formatQueueData(currentQueueResponse.queue);
+            setCurrentQueue(restoredQueue);
+            console.log("✅ Restored current queue:", restoredQueue.queueNo);
+          } else {
+            setCurrentQueue(getDefaultQueue());
+            console.log("🎯 Window is empty - no current queue");
+          }
+        } catch (err) {
+          console.error("⚠️ Failed to check current queue:", err);
+          setCurrentQueue(getDefaultQueue());
+        } finally {
+          setIsLoading(false); // Stop loading after queue is set
+        }
       } else if (response?.status === 409) {
         showToast("Window already taken. Refreshing...", "error");
         await loadWindows();
       } else {
         showToast(response?.message || "Failed to assign window", "error");
+        setIsLoading(false);
       }
     } catch (error) {
       console.error("Error selecting window:", error);
       showToast("Error selecting window", "error");
-    } finally {
       setIsLoading(false);
+    }
+  };
+  // Track when we have no queues available
+  useEffect(() => {
+    if (
+      globalQueueList.length === 0 &&
+      selectedWindow &&
+      isDefaultQueue(currentQueue)
+    ) {
+      console.log("📭 No queues available - setting empty state");
+      setWasQueueEmpty(true);
+    }
+  }, [globalQueueList.length, selectedWindow, currentQueue]);
+
+  // Auto-call with loading state
+  useEffect(() => {
+    if (
+      globalQueueList.length > 0 &&
+      selectedWindow &&
+      isDefaultQueue(currentQueue) &&
+      !autoCallInProgressRef.current
+    ) {
+      console.log("🔄 Auto-calling next - conditions met:", {
+        queueCount: globalQueueList.length,
+        selectedWindow: !!selectedWindow,
+        isDefaultQueue: isDefaultQueue(currentQueue),
+        autoCallInProgress: autoCallInProgressRef.current,
+      });
+
+      const performAutoCall = async () => {
+        autoCallInProgressRef.current = true;
+        setIsLoading(true); // ✅ Start loading
+
+        try {
+          await handleCallNext(selectedWindow);
+          console.log("✅ Auto-call completed successfully");
+        } catch (error) {
+          console.error("❌ Auto-call failed:", error);
+          setWasQueueEmpty(true);
+        } finally {
+          autoCallInProgressRef.current = false;
+          setIsLoading(false); // ✅ Stop loading
+        }
+      };
+
+      // Clear the empty state immediately to prevent multiple triggers
+      setWasQueueEmpty(false);
+
+      const timeoutId = setTimeout(performAutoCall, 1000);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [globalQueueList.length, selectedWindow, handleCallNext, currentQueue]);
+
+  const openActionPanel = (queue) => {
+    setSelectedQueue(queue);
+    setShowActionPanel(true);
+  };
+
+  const closeActionPanel = () => {
+    setShowActionPanel(false);
+    setSelectedQueue(null);
+  };
+  const handleDonePanel = async () => {
+    if (!selectedQueue) {
+      closeActionPanel();
+      return;
+    }
+
+    // 📸 Snapshot for rollback (keep this for the API call case)
+    const snapshot = {
+      selectedQueue: JSON.parse(JSON.stringify(selectedQueue)),
+      deferredQueue: JSON.parse(JSON.stringify(deferredQueue)),
+    };
+
+    try {
+      // 🚀 Check if ALL requests are terminal (Completed or Cancelled only)
+      const allRequestsTerminal = selectedQueue.requests.every(
+        (req) => req.status === "Completed" || req.status === "Cancelled"
+      );
+
+      // Check if there are any Stalled or Skipped requests
+      const hasNonTerminalRequests = selectedQueue.requests.some(
+        (req) => req.status === "Stalled" || req.status === "Skipped"
+      );
+
+      if (allRequestsTerminal) {
+        // ✅ All requests are Completed or Cancelled - proceed with markQueueStatus
+
+        // Optimistically remove queue from deferred list (only for API case)
+        setDeferredQueue((prev) =>
+          prev.filter((q) => q.queueId !== selectedQueue.queueId)
+        );
+        setSelectedQueue(null);
+
+        // 📞 Call backend to mark queue status
+        const markResponse = await markQueueStatus(
+          selectedQueue.queueId,
+          selectedQueue.windowId
+        );
+
+        if (!markResponse?.success) {
+          throw new Error(
+            markResponse?.message || "Failed to finalize queue status"
+          );
+        }
+
+        // ✅ Optional: Sync with final backend state if needed
+        if (markResponse.queue) {
+          const formattedQueue = formatQueueData(markResponse.queue);
+          const finalAllRequestsTerminal = formattedQueue.requests.every(
+            (req) => req.status === "Completed" || req.status === "Cancelled"
+          );
+
+          // Only update if the optimistic state differs from backend
+          if (allRequestsTerminal !== finalAllRequestsTerminal) {
+            if (finalAllRequestsTerminal) {
+              setDeferredQueue((prev) =>
+                prev.filter((q) => q.queueId !== formattedQueue.queueId)
+              );
+              setSelectedQueue(null);
+            } else {
+              setDeferredQueue((prev) =>
+                prev.map((q) =>
+                  q.queueId === formattedQueue.queueId ? formattedQueue : q
+                )
+              );
+              setSelectedQueue(formattedQueue);
+            }
+          }
+        }
+
+        showToast(
+          `Queue ${selectedQueue.queueNo} has been finalized and removed.`,
+          "success"
+        );
+      } else {
+        // ⚠️ There are Stalled, Skipped, or other non-terminal requests
+        // Just close the panel without any UI updates or API calls
+        showToast(
+          `Queue ${selectedQueue.queueNo} cannot be finalized - has unresolved requests.`,
+          "warning"
+        );
+      }
+    } catch (error) {
+      console.error("Error finalizing queue status:", error);
+
+      // 🔄 Rollback on error (only needed for the API call case)
+      setSelectedQueue(snapshot.selectedQueue);
+      setDeferredQueue(snapshot.deferredQueue);
+
+      showToast(error.message || "Error finalizing queue status", "error");
+    } finally {
+      closeActionPanel();
+    }
+  };
+  const shouldDisableAnnounce = () => {
+    const hasNoQueuesToServe = isDefaultQueue(currentQueue);
+    const isCooldown = disabledForSeconds;
+
+    return hasNoQueuesToServe || isCooldown;
+  };
+  const handleCloseWindowSelect = () => {
+    setShowWindowModal(false);
+    navigate("/staff/dashboard");
+    // setIsLoading(false); // ✅ Stop loading when exiting modal
+  };
+  const getStatusColor = (status) => {
+    switch (status) {
+      case "Completed":
+        return "text-green-600 bg-green-50";
+      case "Stalled":
+        return "text-gray-600 bg-gray-50";
+      case "Skipped":
+        return "text-orange-600 bg-orange-50";
+      case "Cancelled":
+        return "text-red-600 bg-red-50";
+      case "In Progress":
+        return "text-blue-600 bg-blue-50";
+      default:
+        return "text-gray-600 bg-gray-50";
     }
   };
 
@@ -697,6 +1142,7 @@ export default function Manage_Queue() {
         : "bg-[#1A73E8] text-white hover:bg-blue-700 w-full",
     disabled: window.status === "inactive",
   }));
+
   // Loading Skeleton Component
   const LoadingSkeleton = () => (
     <div className="min-h-screen bg-transparent w-full p-4 md:p-10">
@@ -806,7 +1252,7 @@ export default function Manage_Queue() {
       {showWindowModal && (
         <DynamicModal
           isOpen={showWindowModal}
-          onClose={() => setShowWindowModal(false)}
+          onClose={handleCloseWindowSelect}
           title="Select a Window to Manage"
           description="Please choose which service window you would like to manage."
           iconAlt="Window Selection"
@@ -817,20 +1263,22 @@ export default function Manage_Queue() {
           showCloseButton={true}
         />
       )}
-      {!isLoading && (
+      {!isLoading && currentQueue && (
         <div className="min-h-screen bg-transparent w-full p-4 md:p-10">
           <div className="max-w-full mx-auto">
             <h1 className="text-2xl md:text-3xl font-semibold text-left text-gray-900 mb-9 mt-6">
               Manage Queue
             </h1>
-
+            {/* Current Queue Display - Updated */}
             <div className="bg-white rounded-xl shadow-xs mb-4 overflow-hidden">
               <div className="p-4 bg- md:p-6">
                 <div className="flex items-center gap-2 mb-4">
                   <div className="bg-[#F5F5F5] p-2 rounded-xl">
                     <img src="/assets/Monitor.png" alt="" />
                   </div>
-                  <span className="font-semibold text-gray-700">Window 1</span>
+                  <span className="font-semibold text-gray-700">
+                    {selectedWindow?.name || "Window 0"}
+                  </span>
                 </div>
 
                 {/* container */}
@@ -1062,16 +1510,20 @@ export default function Manage_Queue() {
                       <button
                         onClick={() =>
                           handleButtonClick(
-                            () => AnnounceQueue(currentQueue.queueNo), //Announce the current queue
+                            () =>
+                              AnnounceQueue(
+                                currentQueue.queueNo,
+                                selectedWindow?.name
+                              ), //Announce the current queue
                             disabledForSeconds,
                             lastAnnounceTime,
                             setDisabledForSeconds,
                             setLastAnnounceTime
                           )
                         }
-                        disabled={disabledForSeconds || queueList.length === 0}
+                        disabled={shouldDisableAnnounce()}
                         className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-colors ${
-                          disabledForSeconds
+                          shouldDisableAnnounce()
                             ? "bg-[#FACC15]/50 cursor-not-allowed text-gray-200"
                             : "bg-yellow-500 hover:bg-yellow-600 text-white cursor-pointer"
                         }`}
@@ -1142,7 +1594,7 @@ export default function Manage_Queue() {
                     {/* Fixed Header */}
                     <div className="overflow-y-scroll custom-scrollbar max-h-96">
                       <table className="w-full min-w-[700px]">
-                        <thead className="bg-white sticky top-0 z-50">
+                        <thead className="bg-white sticky top-0 z-10">
                           <tr className="border-b border-[#E2E3E4]">
                             <th className="text-left py-3 px-4 text-sm font-semibold text-[#686969] w-40">
                               Student ID
@@ -1167,45 +1619,57 @@ export default function Manage_Queue() {
                                 key={index}
                                 className="border-b border-[#E2E3E4] hover:bg-gray-50"
                               >
-                                <td className="text-left py-3 px-4 text-sm text-[#202124] w-40 ">
+                                <td className="text-left py-3 px-4 text-sm text-[#202124] w-40">
                                   {item.studentId}
                                 </td>
-                                <td className="text-left py-3 px-4 text-sm text-[#202124]  w-48">
+                                <td className="text-left py-3 px-4 text-sm text-[#202124] w-48">
                                   {item.name}
                                 </td>
-                                <td className="text-left py-3 px-4 text-sm text-[#202124]  w-64">
+                                <td className="text-left py-3 px-4 text-sm text-[#202124] w-64">
                                   <div className="relative">
-                                    {item.requests[0].name}
-                                    {item.requests.length > 1 && (
+                                    {/* ✅ Add safety check for empty requests array */}
+                                    {item.requests &&
+                                    item.requests.length > 0 ? (
                                       <>
-                                        <span
-                                          className="ml-2 bg-transparent font-semibold border-1 border-[#1A73E8]  text-[#1A73E8] text-xs px-2 py-0.5 rounded-full cursor-pointer"
-                                          onMouseEnter={() =>
-                                            setHoveredRow(`deferred-${index}`)
-                                          }
-                                          onMouseLeave={() =>
-                                            setHoveredRow(null)
-                                          }
-                                        >
-                                          +{item.requests.length - 1}
-                                        </span>
-                                        {hoveredRow === `deferred-${index}` && (
-                                          <div className="absolute bottom-full left-0 mb-2 border border-[#E2E3E4] bg-white text-black p-3 rounded-lg shadow-lg z-50 min-w-[200px]">
-                                            {item.requests
-                                              .slice(1)
-                                              .map((req, idx) => (
-                                                <div
-                                                  key={idx}
-                                                  className="py-1 text-xs"
-                                                >
-                                                  {/* {idx + 2}.  */}
-                                                  {req.name}
-                                                </div>
-                                              ))}
-                                            <div className="absolute top-full left-38 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-transparent"></div>
-                                          </div>
+                                        {item.requests[0].name}
+                                        {item.requests.length > 1 && (
+                                          <>
+                                            <span
+                                              className="ml-2 bg-transparent font-semibold border-1 border-[#1A73E8] text-[#1A73E8] text-xs px-2 py-0.5 rounded-full cursor-pointer"
+                                              onMouseEnter={() =>
+                                                setHoveredRow(
+                                                  `deferred-${index}`
+                                                )
+                                              }
+                                              onMouseLeave={() =>
+                                                setHoveredRow(null)
+                                              }
+                                            >
+                                              +{item.requests.length - 1}
+                                            </span>
+                                            {hoveredRow ===
+                                              `deferred-${index}` && (
+                                              <div className="absolute bottom-full left-0 mb-2 border border-[#E2E3E4] bg-white text-black p-3 rounded-lg shadow-lg z-50 min-w-[200px]">
+                                                {item.requests
+                                                  .slice(1)
+                                                  .map((req, idx) => (
+                                                    <div
+                                                      key={idx}
+                                                      className="py-1 text-xs"
+                                                    >
+                                                      {req.name}
+                                                    </div>
+                                                  ))}
+                                                <div className="absolute top-full left-38 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-transparent"></div>
+                                              </div>
+                                            )}
+                                          </>
                                         )}
                                       </>
+                                    ) : (
+                                      <span className="text-gray-400 italic">
+                                        All requests processed
+                                      </span>
                                     )}
                                   </div>
                                 </td>
@@ -1290,7 +1754,7 @@ export default function Manage_Queue() {
                   <div className="border border-gray-200 rounded-lg overflow-hidden">
                     <div className="overflow-y-scroll custom-scrollbar max-h-96">
                       <table className="w-full min-w-[700px] ">
-                        <thead className=" sticky top-0 bg-white z-50 ">
+                        <thead className=" sticky top-0 bg-white z-10">
                           <tr className="border-b border-[#E2E3E4]">
                             <th className="text-left py-3 px-4 text-sm font-semibold text-[#686969] w-32">
                               Queue No.
@@ -1334,13 +1798,15 @@ export default function Manage_Queue() {
                                   {item.name}
                                 </td>
                                 <td className="text-left py-4 px-4 text-sm text-[#202124] w-64">
-                                  {item.request ? (
-                                    <div className="relative ">
-                                      {item.request[0]}
-                                      {item.request.length > 1 && (
+                                  {item.requests && item.requests.length > 0 ? (
+                                    <div className="relative">
+                                      {/* Show first request name */}
+                                      {item.requests[0].name}
+
+                                      {item.requests.length > 1 && (
                                         <>
                                           <span
-                                            className="ml-2 bg-transparent text-[#1A73E8]  font-semibold border-1 border-[#1A73E8] text-xs px-2 py-0.5 rounded-full cursor-pointer"
+                                            className="ml-2 bg-transparent text-[#1A73E8] font-semibold border border-[#1A73E8] text-xs px-2 py-0.5 rounded-full cursor-pointer"
                                             onMouseEnter={() =>
                                               setHoveredRow(index)
                                             }
@@ -1348,38 +1814,35 @@ export default function Manage_Queue() {
                                               setHoveredRow(null)
                                             }
                                           >
-                                            +{item.request.length - 1}
+                                            +{item.requests.length - 1}
                                           </span>
+
                                           {hoveredRow === index && (
                                             <div className="absolute bottom-full left-0 mb-2 bg-white border border-[#E2E3E4] text-black p-3 rounded-lg shadow-lg z-50 min-w-[200px]">
-                                              {item.request
+                                              {item.requests
                                                 .slice(1)
                                                 .map((req, idx) => (
                                                   <div
-                                                    key={idx}
-                                                    className="py-1 text-xs "
+                                                    key={req.id}
+                                                    className="py-1 text-xs"
                                                   >
-                                                    {/* {idx + 2}. */}
-                                                    {req}
+                                                    {req.name}{" "}
+                                                    {/* You can also add status if you want: {req.name} - {req.status} */}
                                                   </div>
                                                 ))}
-                                              <div className="absolute top-full left-38 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-transparent "></div>
+                                              <div className="absolute top-full left-38 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-transparent"></div>
                                             </div>
                                           )}
                                         </>
                                       )}
                                     </div>
                                   ) : (
-                                    <>
-                                      {item.request}
-                                      {item.count && (
-                                        <span className="ml-2 bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">
-                                          +{item.count}
-                                        </span>
-                                      )}
-                                    </>
+                                    <span className="text-gray-400">
+                                      No requests
+                                    </span>
                                   )}
                                 </td>
+
                                 <td className="text-left py-3 px-4 text-sm text-gray-900">
                                   {item.time}
                                 </td>
@@ -1601,15 +2064,23 @@ export default function Manage_Queue() {
                       <div className="flex gap-3 mt-8 justify-end">
                         <button
                           onClick={handleDonePanel}
-                          disabled={selectedQueue.requests.some(
-                            (request) => request.status === "Stalled"
-                          )}
-                          className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-colors ${
-                            selectedQueue.requests.some(
-                              (request) => request.status === "Stalled"
+                          disabled={
+                            !selectedQueue.requests.every(
+                              (request) =>
+                                request.status === "Completed" ||
+                                request.status === "Cancelled" ||
+                                request.status === "Skipped"
                             )
-                              ? "bg-[#1A73E8]/50 text-gray-200 cursor-not-allowed"
-                              : "bg-[#1A73E8] text-white hover:bg-blue-600 cursor-pointer"
+                          }
+                          className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-colors ${
+                            selectedQueue.requests.every(
+                              (request) =>
+                                request.status === "Completed" ||
+                                request.status === "Cancelled" ||
+                                request.status === "Skipped"
+                            )
+                              ? "bg-[#1A73E8] text-white hover:bg-blue-600 cursor-pointer"
+                              : "bg-[#1A73E8]/50 text-gray-200 cursor-not-allowed"
                           }`}
                         >
                           <Check className="w-4 h-4" />
