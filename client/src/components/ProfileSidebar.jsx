@@ -66,7 +66,7 @@ export default function ProfileSidebar() {
         } transition-transform duration-300 ease-in-out xl:hidden z-50`}
       >
         <div className="relative flex flex-col py-10 px-6">
-          {/* Minimize Button (animated when closing) */}
+          {/* Minimize Button */}
           {isOpen && (
             <button
               className={`absolute top-4 -right-12 bg-white p-2 rounded-md shadow-md transform transition-all duration-300 ${
@@ -128,8 +128,8 @@ export default function ProfileSidebar() {
       </div>
 
       {/* ===== Desktop Sidebar (always open, fixed width) ===== */}
-      <div className="hidden min-h-screen w-[43vh] xl:flex bg-[#F5F5F5]">
-        <div className="min-w-[35vh] ml-20 flex flex-col py-10 px-6">
+      <div className="hidden xl:flex fixed top-0 left-0 h-screen bg-[#F5F5F5] w-90 z-40 lg:pl-15">
+        <div className="flex flex-col py-10 px-3 w-full overflow-y-auto">
           <ArrowLeftCircle
             onClick={() => navigate("/")}
             size={55}
